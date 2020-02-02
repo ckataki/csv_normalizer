@@ -1,0 +1,194 @@
+#!/usr/bin/env python3
+
+"""
+CSV normalizer that accepts input on stdin, and returns output on stdout.
+Providing a normalized csv file itself to this program will not work.
+
+Written and tested on Python 3.7.6. Requires at least Python 3.5.
+"""
+
+import csv
+import io
+import sys
+from datetime import datetime, timedelta
+from decimal import Decimal
+from typing import Dict
+
+
+class CSVNormalizerError(Exception):
+
+    """Simple exception class for all caught errors."""
+
+    pass
+
+
+class CSVNormalizer:
+
+    """CSV normalizer that accepts input on stdin, and returns output on stdout."""
+    
+    def __init__(self) -> None:
+        """
+        Initialize the read and write buffers.
+
+        Currently hardcoded to read from stdin, and write to stdout. This can be easily modified in the future to
+        allow for different read and write buffers.
+        """
+
+        # Replace UTF-8 errors with the Unicode Replacement Character (U+FFFD)
+
+        self._read_buffer = io.TextIOWrapper(
+                sys.stdin.buffer, encoding="utf-8", errors="replace", newline=None, line_buffering=False)
+
+        # Flush automatically on newline for both stdout and stderr
+
+        self._write_buffer = io.TextIOWrapper(
+            sys.stdout.buffer, encoding="utf-8", newline=None, line_buffering=True)
+
+        self._error_buffer = io.TextIOWrapper(
+            sys.stderr.buffer, encoding="utf-8", newline=None, line_buffering=True)
+
+    def close_buffers(self) -> None:
+        """Close all opened buffers."""
+
+        self._read_buffer.close()
+        self._write_buffer.close()
+        self._error_buffer.close()
+
+    def normalize_timestamp(self, time_stamp: str) -> str:
+        """
+        Return timestamp as an ISO 8601 string.
+
+        Assume input timezone is always US/Pacific. Output timezone is US/Eastern.
+        """
+
+        # Eastern timezone offset from Pacific
+        offset = timedelta(hours=3)
+
+        try:
+
+            # Ignore reading in the timezone since we always assume Pacific
+            result = datetime.strptime(time_stamp, "%m/%d/%y %I:%M:%S %p") - offset
+            return "".join([result.isoformat(), "-05:00"])
+
+        except ValueError:
+            raise CSVNormalizerError("timestamp error")
+
+    def normalize_zipcode(self, zipcode: str) -> str:
+        """Normalize a zipcode with prefixed zeroes as needed."""
+
+        # We assume zipcodes can only use digits 0-9
+        if zipcode.isascii() and zipcode.isdecimal():
+            return zipcode.zfill(5)
+        
+        else:
+            raise CSVNormalizerError("zipcode error")
+
+    def normalize_fullname(self, fullname: str) -> str:
+        """Return the uppercase version of the full name."""
+
+        return fullname.upper()
+
+    def duration_in_seconds(self, duration: str) -> float:
+        """
+        Return the duration in seconds as a floating point number.
+
+        Input is expected in HH:MM:SS.MS format.
+        """
+
+        # Split up hour, min, and seconds
+        time_splits = duration.split(":")
+
+        if len(time_splits) != 3:
+            raise CSVNormalizerError("unparseable duration")
+
+        # Split up seconds and milliseconds
+        seconds_splits = time_splits[2].split(".")
+
+        duration = timedelta(
+            hours=int(time_splits[0]) if time_splits[0] else 0,
+            minutes=int(time_splits[1]) if time_splits[1] else 0,
+            seconds=int(seconds_splits[0]) if seconds_splits[0] else 0,
+        )
+
+        if len(seconds_splits) > 1:
+            duration = duration + timedelta(milliseconds=int(seconds_splits[1]) if seconds_splits[1] else 0)
+
+        return duration.total_seconds()
+
+    def add_durations(self, d1: Decimal, d2: Decimal) -> Decimal:
+        """
+        Add two durations.
+
+        We use the Decimal module to deal with precision errors with floating point arithmetic.
+        """
+
+        # Quantize method on a Decimal class will round to a specific number of palces after the decimal point
+
+        return (Decimal(d1) + Decimal(d2)).quantize(Decimal("0.001"))
+
+    def normalize_duration(self, duration: Decimal) -> str:
+        """Normalize a floating point duration as a string."""
+
+        return str(duration)
+
+    def parse_row(self, row: Dict, lineno: int) -> Dict:
+        """Parse one row of the CSV input and return the normalized row."""
+
+        try:
+
+            foo = self.duration_in_seconds(row["FooDuration"])
+            bar = self.duration_in_seconds(row["BarDuration"])
+            total = self.add_durations(foo, bar)
+
+            temp = {
+                "Timestamp": self.normalize_timestamp(row["Timestamp"]),
+                "Address": row["Address"],
+                "ZIP": self.normalize_zipcode(row["ZIP"]),
+                "FullName": self.normalize_fullname(row["FullName"]),
+                "FooDuration": self.normalize_duration(foo),
+                "BarDuration": self.normalize_duration(bar),
+                "TotalDuration": self.normalize_duration(total),
+                "Notes": row["Notes"],
+            }
+
+            return temp
+
+        except CSVNormalizerError as ex:
+            self._error_buffer.write(f"\nUnparseable row at line number: {lineno}\nError: {ex}\n")
+            return None
+
+    def normalize(self) -> None:
+        """
+        Normalize the CSV input one line at a time.
+
+        We normalize each line as it's read, instead of reading all lines in one go.
+        """
+        
+        lineno = 1
+
+        try:
+
+            reader = csv.DictReader(self._read_buffer)
+            writer = csv.DictWriter(self._write_buffer, fieldnames=reader.fieldnames)
+            writer.writeheader()
+
+            # Parse and normalize each row. For errors, skip it.
+
+            for row in reader:
+                lineno += 1
+                temp = self.parse_row(row, lineno)
+                if temp is not None:
+                    writer.writerow(temp)
+
+        except Exception as ex:
+            self._error_buffer.write(f"\nUnhandled error! Could not continue.\nDebug information: {ex}.\n")
+
+        finally:
+            self.close_buffers()
+
+
+if __name__ == "__main__":
+
+    normalizer = CSVNormalizer()
+    normalizer.normalize()
+    
