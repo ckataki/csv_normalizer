@@ -17,14 +17,15 @@ Given a CSV file on stdin, normalize it, and print the normalized CSV to stdout.
 
 #### Steps
 
-1. In the main directory (the one with the README), simply run the program (ensure it is executable).
+1. In the main directory, simply run the program (ensure it is executable).
 
- `chmod +x normalizer`
+`chmod +x normalizer`
+ 
  `./normalizer < input_file.csv > output_file.csv`
 
 2. The program expects input from stdin, and outputs to stdout. Not providing an output file will dump the output on the terminal.
 
- `./normalizer < input_file.csv`
+  `./normalizer < input_file.csv`
 
 
 ### Future Work (not exhaustive!)
